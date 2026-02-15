@@ -6,19 +6,17 @@ namespace CheckOut.Models;
 public class CheckIn
 {
 	[PrimaryKey, Identity]
-    public Guid Id { get; set; }
+    public int Id { get; set; }
 	[Column, NotNull]
-    public Guid TeacherId { get; set; }
+	public int TeacherId { get; set; }
 	[Column, NotNull]
-    public Guid DeviceId { get; set; }
+	public int DeviceId { get; set; }
 
-	[Association(ThisKey = nameof(TeacherId), OtherKey = nameof(Teacher.Id))]
-	public required Teacher Teacher { get; set; }
-	[Association(ThisKey = nameof(DeviceId), OtherKey = nameof(Device.Id))]
-	public required Device Device { get; set; }
-    
+	[Association(ThisKey = nameof(TeacherId), OtherKey = nameof(Teacher.Id)), NotNull]
+	public Teacher Teacher { get; set; } = null!;
+	[Association(ThisKey = nameof(DeviceId), OtherKey = nameof(Device.TeacherId)), NotNull]
+	public Device Device { get; set; } = null!;
+
 	[Column, NotNull]
-    public DateTime CheckInTime { get; set; }
-	[Column, NotNull]
-    public DateTime CreatedAt { get; set; }
+	public DateTime CheckInTime { get; set; } = DateTime.UtcNow;
 }
