@@ -19,4 +19,25 @@ public class AppDataContext(DataOptions options) : DataConnection(options)
 		db.CreateTable<Device>(tableOptions: TableOptions.CreateIfNotExists);
 		db.CreateTable<CheckIn>(tableOptions: TableOptions.CreateIfNotExists);
 	}
+
+	public static void DeleteDatabase(string connectionString)
+	{
+		// Extract the database file path from the connection string
+		var connectionParts = connectionString.Split(';');
+		string? dbPath = null;
+
+		foreach (var part in connectionParts)
+		{
+			if (part.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+			{
+				dbPath = part.Substring("Data Source=".Length).Trim();
+				break;
+			}
+		}
+
+		if (!string.IsNullOrEmpty(dbPath) && File.Exists(dbPath))
+		{
+			File.Delete(dbPath);
+		}
+	}
 }
