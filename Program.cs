@@ -44,7 +44,8 @@ app.MapPost("/api/check-in", async ([FromBody] CheckinReqest reqest, AppDataCont
 
 	if (teacher is not null && device is not null)
 	{
-		var checkIn = new CheckIn {
+		var checkIn = new CheckIn
+		{
 			TeacherId = teacher.Id,
 			DeviceId = device.TeacherId,
 		};
@@ -90,12 +91,27 @@ app.MapPost("/api/check-in", async ([FromBody] CheckinReqest reqest, AppDataCont
 
 app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string deviceStatus) =>
 {
-	var checkIns = await db.CheckIns
-		.LoadWith(c => c.Teacher)
-		.LoadWith(c => c.Device)
-		.Where(c => c.Device.DeviceStatus == deviceStatus)
-		.ToListAsync();
-	return Results.Ok(checkIns);
+	IEnumerable<CheckIn> checkIns;
+	if (string.IsNullOrEmpty(deviceStatus))
+	{
+		checkIns = await db.CheckIns
+			.LoadWith(c => c.Teacher)
+			.LoadWith(c => c.Device)
+			.ToListAsync();
+		return Results.Ok(checkIns);
+	}
+
+	if (DeviceStatus.IsValidStatus(deviceStatus))
+	{
+		checkIns = await db.CheckIns
+			.LoadWith(c => c.Teacher)
+			.LoadWith(c => c.Device)
+			.Where(c => c.Device.DeviceStatus == deviceStatus)
+			.ToListAsync();
+		return Results.Ok(checkIns);
+	}
+
+	return Results.BadRequest("Invalid device status filter.");
 });
 
 app.Run();
