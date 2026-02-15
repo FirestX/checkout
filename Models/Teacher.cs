@@ -6,21 +6,19 @@ namespace CheckOut.Models;
 public class Teacher
 {
 	[PrimaryKey, Identity]
-	public Guid Id { get; set; }
+	public int Id { get; set; }
 	[Column, NotNull]
-	public required string GoogleId { get; set; }
+	public string GoogleId { get; set; } = null!;
 	[Column, NotNull]
-	public required string Email { get; set; }
+	public string Email { get; set; } = null!;
 	[Column, NotNull]
-	public required string FullName { get; set; }
+	public string FullName { get; set; } = null!;
+
+	[Association(ThisKey = nameof(Id), OtherKey = nameof(Device.TeacherId))]
+	public Device? Device { get; set; }
 
 	[Column, NotNull]
-	public Guid DeviceId { get; set; }
-	[Association(ThisKey = nameof(DeviceId), OtherKey = nameof(Device.Id))]
-	public required Device Device { get; set; }
-
+	public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 	[Column, NotNull]
-	public DateTime UpdatedAt { get; set; }
-	[Column, NotNull]
-	public DateTime CreatedAt { get; set; }
+	public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
