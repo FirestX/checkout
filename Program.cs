@@ -26,6 +26,8 @@ if (app.Environment.IsDevelopment())
 	app.UseSwagger();
 	app.UseSwaggerUI();
 
+	AppDataContext.DeleteDatabase(connectionString);
+
 	// Initialize database tables
 	AppDataContext.InitializeDatabase(dataOptions, connectionString);
 }
@@ -84,6 +86,16 @@ app.MapPost("/api/check-in", async ([FromBody] CheckinReqest reqest, AppDataCont
 	}
 
 	return Results.BadRequest("Check-in failed. Please contact support.");
+});
+
+app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string deviceStatus) =>
+{
+	var checkIns = await db.CheckIns
+		.LoadWith(c => c.Teacher)
+		.LoadWith(c => c.Device)
+		.Where(c => c.Device.DeviceStatus == deviceStatus)
+		.ToListAsync();
+	return Results.Ok(checkIns);
 });
 
 app.Run();
