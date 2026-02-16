@@ -6,11 +6,14 @@ namespace CheckOut.Models;
 public class Device
 {
 	[PrimaryKey, Identity]
-	public int TeacherId { get; set; }
+	public int Id { get; set; }
 	[Column, NotNull]
 	public required string Fingerprint { get; set; } = null!;
 	[Column, NotNull]
 	public required string DeviceStatus { get; set; } = null!;
+
+	[Column, NotNull]
+	public int TeacherId { get; set; }
 
 	[Association(ThisKey = nameof(TeacherId), OtherKey = nameof(Teacher.Id)), NotNull]
 	public Teacher Teacher { get; set; } = null!;

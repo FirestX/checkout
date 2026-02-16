@@ -47,7 +47,7 @@ app.MapPost("/api/check-in", async ([FromBody] CheckinReqest reqest, AppDataCont
 		var checkIn = new CheckIn
 		{
 			TeacherId = teacher.Id,
-			DeviceId = device.TeacherId,
+			DeviceId = device.Id,
 		};
 		await db.InsertAsync(checkIn);
 		return Results.Ok("Check-in successful.");
@@ -91,6 +91,7 @@ app.MapPost("/api/check-in", async ([FromBody] CheckinReqest reqest, AppDataCont
 
 app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string deviceStatus) =>
 {
+	// use dtos
 	IEnumerable<CheckIn> checkIns;
 	if (string.IsNullOrEmpty(deviceStatus))
 	{
@@ -112,6 +113,32 @@ app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string device
 	}
 
 	return Results.BadRequest("Invalid device status filter.");
+});
+
+app.MapPatch("/api/devices/{deviceId}/approve", async (int deviceId, AppDataContext db) =>
+{
+	var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == deviceId);
+	if (device is null)
+	{
+		return Results.NotFound("Device not found.");
+	}
+
+	device.DeviceStatus = DeviceStatus.Approved;
+	await db.UpdateAsync(device);
+	return Results.Ok("Device approved successfully.");
+});
+
+app.MapPatch("/api/devices/{deviceId}/block", async (int deviceId, AppDataContext db) =>
+{
+	var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == deviceId);
+	if (device is null)
+	{
+		return Results.NotFound("Device not found.");
+	}
+
+	device.DeviceStatus = DeviceStatus.Blocked;
+	await db.UpdateAsync(device);
+	return Results.Ok("Device blocked successfully.");
 });
 
 app.Run();
