@@ -74,7 +74,7 @@ app.UseAuthorization();
 // =============================================================================
 
 app.MapPost("/api/auth/google", async (
-	[FromBody] GoogleAuthRequest request,
+	[FromBody] string idToken,
 	AppDataContext db,
 	GoogleAuthService googleAuth,
 	JwtService jwt) =>
@@ -82,7 +82,7 @@ app.MapPost("/api/auth/google", async (
 	try
 	{
 		// 1. Verify Google token
-		var payload = await googleAuth.VerifyGoogleTokenAsync(request.IdToken);
+		var payload = await googleAuth.VerifyGoogleTokenAsync(idToken);
 
 		// 2. Find or create teacher
 		var teacher = await db.Teachers
@@ -107,34 +107,6 @@ app.MapPost("/api/auth/google", async (
 				teacher.FullName = payload.Name ?? payload.Email;
 				await db.UpdateAsync(teacher);
 			}
-		}
-
-		// 3. Find or create device
-		var device = await db.Devices
-			.FirstOrDefaultAsync(d => d.Fingerprint == request.DeviceFingerprint
-									&& d.TeacherId == teacher.Id);
-
-		string deviceStatus;
-		if (device == null)
-		{
-			device = new Device
-			{
-				TeacherId = teacher.Id,
-				Fingerprint = request.DeviceFingerprint,
-				DeviceStatus = DeviceStatus.Pending,
-				LastSeen = DateTime.UtcNow,
-				CreatedAt = DateTime.UtcNow,
-				UpdatedAt = DateTime.UtcNow
-			};
-			await db.InsertAsync(device);
-			deviceStatus = DeviceStatus.Pending;
-		}
-		else
-		{
-			deviceStatus = device.DeviceStatus;
-			device.LastSeen = DateTime.UtcNow;
-			device.UpdatedAt = DateTime.UtcNow;
-			await db.UpdateAsync(device);
 		}
 
 		// 4. Generate JWT

@@ -31,16 +31,16 @@ public class JwtService
 			throw new ArgumentException("Jwt:SecretKey must be at least 32 characters long");
 	}
 
-	public string GenerateToken(int teacherId, string googleId, string email)
+	public string GenerateToken(int teacherId, string fullName, string email)
 	{
 		var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secretKey));
 		var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
 
 		var claims = new[]
 		{
-			new Claim(JwtRegisteredClaimNames.Sub, googleId),
+			new Claim(JwtRegisteredClaimNames.Sub, teacherId.ToString()),
 			new Claim(JwtRegisteredClaimNames.Email, email),
-			new Claim("TeacherId", teacherId.ToString()),
+			new Claim(JwtRegisteredClaimNames.Name, fullName),
 			new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
 			new Claim(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
 		};
@@ -56,12 +56,7 @@ public class JwtService
 		return new JwtSecurityTokenHandler().WriteToken(token);
 	}
 
-	public DateTime GetExpirationTime()
-	{
-		return DateTime.UtcNow.AddHours(_expirationHours);
-	}
-
-	public TokenValidationParameters GetTokenValidationParameters()
+	private TokenValidationParameters GetTokenValidationParameters()
 	{
 		return new TokenValidationParameters
 		{
