@@ -1,8 +1,10 @@
 using CheckOut.Data;
 using CheckOut.Models;
 using CheckOut.Models.Dtos;
+using CheckOut.Services;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +18,31 @@ var dataOptions = new DataOptions()
 	.UseSQLite(connectionString);
 
 builder.Services.AddScoped(_ => new AppDataContext(dataOptions));
+
+// Register authentication services
+builder.Services.AddSingleton<JwtService>();
+builder.Services.AddSingleton<GoogleAuthService>();
+
+// Configure CORS
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options =>
+{
+	options.AddPolicy("AllowFrontend", policy =>
+	{
+		policy.WithOrigins(allowedOrigins)
+			.AllowAnyHeader()
+			.AllowAnyMethod();
+	});
+});
+
+// Configure JWT authentication
+var jwtService = new JwtService(builder.Configuration);
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+	.AddJwtBearer(options =>
+	{
+		options.TokenValidationParameters = jwtService.GetTokenValidationParameters();
+	});
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
@@ -37,7 +64,139 @@ if (!app.Environment.IsDevelopment())
 	app.UseHttpsRedirection();
 }
 
-app.MapPost("/api/check-in", async ([FromBody] CheckinReqest reqest, AppDataContext db) =>
+// Middleware order is important
+app.UseCors("AllowFrontend");
+app.UseAuthentication();
+app.UseAuthorization();
+
+// =============================================================================
+// Authentication Endpoints
+// =============================================================================
+
+app.MapPost("/api/auth/google", async (
+	[FromBody] GoogleAuthRequest request,
+	AppDataContext db,
+	GoogleAuthService googleAuth,
+	JwtService jwt) =>
+{
+	try
+	{
+		// 1. Verify Google token
+		var payload = await googleAuth.VerifyGoogleTokenAsync(request.IdToken);
+
+		// 2. Find or create teacher
+		var teacher = await db.Teachers
+			.FirstOrDefaultAsync(t => t.GoogleId == payload.Subject);
+
+		if (teacher == null)
+		{
+			teacher = new Teacher
+			{
+				GoogleId = payload.Subject,
+				Email = payload.Email,
+				FullName = payload.Name ?? payload.Email
+			};
+			teacher.Id = await db.InsertWithInt32IdentityAsync(teacher);
+		}
+		else
+		{
+			// Update teacher info if changed
+			if (teacher.Email != payload.Email || teacher.FullName != payload.Name)
+			{
+				teacher.Email = payload.Email;
+				teacher.FullName = payload.Name ?? payload.Email;
+				await db.UpdateAsync(teacher);
+			}
+		}
+
+		// 3. Find or create device
+		var device = await db.Devices
+			.FirstOrDefaultAsync(d => d.Fingerprint == request.DeviceFingerprint
+									&& d.TeacherId == teacher.Id);
+
+		string deviceStatus;
+		if (device == null)
+		{
+			device = new Device
+			{
+				TeacherId = teacher.Id,
+				Fingerprint = request.DeviceFingerprint,
+				DeviceStatus = DeviceStatus.Pending,
+				LastSeen = DateTime.UtcNow,
+				CreatedAt = DateTime.UtcNow,
+				UpdatedAt = DateTime.UtcNow
+			};
+			await db.InsertAsync(device);
+			deviceStatus = DeviceStatus.Pending;
+		}
+		else
+		{
+			deviceStatus = device.DeviceStatus;
+			device.LastSeen = DateTime.UtcNow;
+			device.UpdatedAt = DateTime.UtcNow;
+			await db.UpdateAsync(device);
+		}
+
+		// 4. Generate JWT
+		var token = jwt.GenerateToken(teacher.Id, teacher.GoogleId, teacher.Email);
+
+		// 5. Return auth response
+		return Results.Ok(new AuthResponse
+		{
+			Token = token,
+			ExpiresAt = jwt.GetExpirationTime(),
+			User = new AuthUserInfo
+			{
+				Id = teacher.Id,
+				GoogleId = teacher.GoogleId,
+				Email = teacher.Email,
+				FullName = teacher.FullName
+			},
+			DeviceStatus = deviceStatus
+		});
+	}
+	catch (InvalidOperationException ex)
+	{
+		return Results.Problem(ex.Message, statusCode: StatusCodes.Status401Unauthorized);
+	}
+	catch (Exception ex)
+	{
+		Console.WriteLine($"Authentication error: {ex.Message}");
+		return Results.Problem("An error occurred during authentication");
+	}
+})
+.WithName("GoogleAuth");
+
+app.MapGet("/api/auth/me", async (HttpContext context, AppDataContext db) =>
+{
+	var teacherIdClaim = context.User.FindFirst("TeacherId")?.Value;
+	if (teacherIdClaim == null || !int.TryParse(teacherIdClaim, out var teacherId))
+	{
+		return Results.Unauthorized();
+	}
+
+	var teacher = await db.Teachers.FirstOrDefaultAsync(t => t.Id == teacherId);
+	if (teacher == null)
+	{
+		return Results.NotFound("Teacher not found");
+	}
+
+	return Results.Ok(new AuthUserInfo
+	{
+		Id = teacher.Id,
+		GoogleId = teacher.GoogleId,
+		Email = teacher.Email,
+		FullName = teacher.FullName
+	});
+})
+.RequireAuthorization()
+.WithName("GetCurrentUser");
+
+// =============================================================================
+// Check-in Endpoints
+// =============================================================================
+
+app.MapPost("/api/check-ins", async ([FromBody] CheckinReqest reqest, AppDataContext db) =>
 {
 	var teacher = await db.Teachers.FirstOrDefaultAsync(t => t.Email == reqest.Teacher.Email);
 	var device = await db.Devices.FirstOrDefaultAsync(d => d.Fingerprint == reqest.Device.Fingerprint);
@@ -114,6 +273,10 @@ app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string device
 
 	return Results.BadRequest("Invalid device status filter.");
 });
+
+// =============================================================================
+// Device Management Endpoints
+// =============================================================================
 
 app.MapPatch("/api/devices/{deviceId}/approve", async (int deviceId, AppDataContext db) =>
 {
