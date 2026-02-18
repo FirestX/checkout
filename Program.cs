@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using CheckOut.Data;
 using CheckOut.Models;
 using CheckOut.Models.Dtos;
@@ -6,11 +7,27 @@ using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+	c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+	{
+		Name = "Authorization",
+		In = ParameterLocation.Header,
+		Type = SecuritySchemeType.Http,
+		Scheme = "Bearer",
+		BearerFormat = "JWT"
+	});
+
+	c.AddSecurityRequirement(doc => new OpenApiSecurityRequirement
+	{
+		[new OpenApiSecuritySchemeReference("Bearer", doc)] = []
+	});
+});
 
 // Register AppDataContext with SQLite
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")!;
@@ -64,7 +81,6 @@ if (!app.Environment.IsDevelopment())
 	app.UseHttpsRedirection();
 }
 
-// Middleware order is important
 app.UseCors("AllowFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
@@ -77,14 +93,24 @@ app.MapPost("/api/auth/google", async (
 	[FromBody] string idToken,
 	AppDataContext db,
 	GoogleAuthService googleAuth,
-	JwtService jwt) =>
+	JwtService jwt,
+	IConfiguration configuration) =>
 {
 	try
 	{
 		// 1. Verify Google token
 		var payload = await googleAuth.VerifyGoogleTokenAsync(idToken);
 
-		// 2. Find or create teacher
+		// 2. Validate email domain
+		var allowedDomains = configuration.GetSection("Authentication:AllowedEmailDomains").Get<string[]>() ?? [];
+		if (allowedDomains.Length > 0 && !IsEmailDomainAllowed(payload.Email, allowedDomains))
+		{
+			return Results.Problem(
+				$"Email domain not allowed. Please use an account from an authorized domain.",
+				statusCode: StatusCodes.Status403Forbidden);
+		}
+
+		// 3. Find or create teacher
 		var teacher = await db.Teachers
 			.FirstOrDefaultAsync(t => t.GoogleId == payload.Subject);
 
@@ -110,22 +136,10 @@ app.MapPost("/api/auth/google", async (
 		}
 
 		// 4. Generate JWT
-		var token = jwt.GenerateToken(teacher.Id, teacher.GoogleId, teacher.Email);
+		var token = jwt.GenerateToken(teacher.Id, teacher.FullName, teacher.Email);
 
 		// 5. Return auth response
-		return Results.Ok(new AuthResponse
-		{
-			Token = token,
-			ExpiresAt = jwt.GetExpirationTime(),
-			User = new AuthUserInfo
-			{
-				Id = teacher.Id,
-				GoogleId = teacher.GoogleId,
-				Email = teacher.Email,
-				FullName = teacher.FullName
-			},
-			DeviceStatus = deviceStatus
-		});
+		return Results.Ok(token);
 	}
 	catch (InvalidOperationException ex)
 	{
@@ -139,88 +153,162 @@ app.MapPost("/api/auth/google", async (
 })
 .WithName("GoogleAuth");
 
-app.MapGet("/api/auth/me", async (HttpContext context, AppDataContext db) =>
+// =============================================================================
+// Dev/Test Endpoints (Development only)
+// =============================================================================
+
+if (app.Environment.IsDevelopment())
 {
-	var teacherIdClaim = context.User.FindFirst("TeacherId")?.Value;
-	if (teacherIdClaim == null || !int.TryParse(teacherIdClaim, out var teacherId))
+	app.MapPost("/api/auth/test", async (
+		[FromBody] TestAuthRequest request,
+		AppDataContext db,
+		JwtService jwt,
+		IConfiguration configuration) =>
+	{
+		try
+		{
+			// 1. Validate email domain
+			var allowedDomains = configuration.GetSection("Authentication:AllowedEmailDomains").Get<string[]>() ?? [];
+			if (allowedDomains.Length > 0 && !IsEmailDomainAllowed(request.Email, allowedDomains))
+			{
+				return Results.Problem(
+					$"Email domain not allowed. Please use an account from an authorized domain.",
+					statusCode: StatusCodes.Status403Forbidden);
+			}
+
+			// 2. Find or create teacher for testing
+			var teacher = await db.Teachers
+				.FirstOrDefaultAsync(t => t.GoogleId == request.GoogleId);
+
+			if (teacher == null)
+			{
+				teacher = new Teacher
+				{
+					GoogleId = request.GoogleId,
+					Email = request.Email,
+					FullName = request.FullName
+				};
+				teacher.Id = await db.InsertWithInt32IdentityAsync(teacher);
+				Console.WriteLine($"Created test teacher: {teacher.FullName} ({teacher.Email})");
+			}
+
+			// 3. Generate JWT
+			var token = jwt.GenerateToken(teacher.Id, teacher.FullName, teacher.Email);
+
+			return Results.Ok(token);
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"Test auth error: {ex.Message}");
+			return Results.Problem("An error occurred during test authentication");
+		}
+	})
+	.WithName("TestAuth");
+}
+
+app.MapPost("/api/check-ins", async (
+	[FromBody] CheckInRequestDto request,
+	HttpContext httpContext,
+	AppDataContext db) =>
+{
+	// Extract teacher info from JWT claims
+	var teacherIdClaim = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+	var emailClaim = httpContext.User.FindFirst(ClaimTypes.Email)?.Value;
+	var fullNameClaim = httpContext.User.FindFirst(ClaimTypes.Name)?.Value;
+
+	if (string.IsNullOrEmpty(teacherIdClaim) || string.IsNullOrEmpty(emailClaim))
 	{
 		return Results.Unauthorized();
 	}
 
+	if (!int.TryParse(teacherIdClaim, out var teacherId))
+	{
+		return Results.Unauthorized();
+	}
+
+	// Verify teacher exists in database
 	var teacher = await db.Teachers.FirstOrDefaultAsync(t => t.Id == teacherId);
 	if (teacher == null)
 	{
 		return Results.NotFound("Teacher not found");
 	}
 
-	return Results.Ok(new AuthUserInfo
-	{
-		Id = teacher.Id,
-		GoogleId = teacher.GoogleId,
-		Email = teacher.Email,
-		FullName = teacher.FullName
-	});
-})
-.RequireAuthorization()
-.WithName("GetCurrentUser");
+	// Find device by fingerprint
+	var device = await db.Devices.FirstOrDefaultAsync(d => d.Fingerprint == request.DeviceFingerprint);
 
-// =============================================================================
-// Check-in Endpoints
-// =============================================================================
-
-app.MapPost("/api/check-ins", async ([FromBody] CheckinReqest reqest, AppDataContext db) =>
-{
-	var teacher = await db.Teachers.FirstOrDefaultAsync(t => t.Email == reqest.Teacher.Email);
-	var device = await db.Devices.FirstOrDefaultAsync(d => d.Fingerprint == reqest.Device.Fingerprint);
-
-	if (teacher is not null && device is not null)
-	{
-		var checkIn = new CheckIn
-		{
-			TeacherId = teacher.Id,
-			DeviceId = device.Id,
-		};
-		await db.InsertAsync(checkIn);
-		return Results.Ok("Check-in successful.");
-	}
-
-	if (teacher is null)
-	{
-		var newTeacher = new Teacher()
-		{
-			GoogleId = reqest.Teacher.GoogleId,
-			Email = reqest.Teacher.Email,
-			FullName = reqest.Teacher.FullName
-		};
-		var teacherId = await db.InsertWithInt32IdentityAsync(newTeacher);
-		var newDevice = new Device()
-		{
-			TeacherId = teacherId,
-			Fingerprint = reqest.Device.Fingerprint,
-			DeviceStatus = DeviceStatus.Pending
-		};
-		var deviceId = await db.InsertWithInt32IdentityAsync(newDevice);
-		Console.WriteLine("Require admin approval for new device.");
-		return Results.Ok("Check-in successful. Your device is pending approval.");
-	}
-
+	// If device doesn't exist, create it with Pending status
 	if (device is null)
 	{
-		var newDevice = new Device()
+		var newDevice = new Device
 		{
-			TeacherId = teacher.Id,
-			Fingerprint = reqest.Device.Fingerprint,
+			TeacherId = teacherId,
+			Fingerprint = request.DeviceFingerprint,
 			DeviceStatus = DeviceStatus.Pending
 		};
 		var deviceId = await db.InsertWithInt32IdentityAsync(newDevice);
-		Console.WriteLine("Require admin approval for new device.");
-		return Results.Ok("Check-in successful. Your device is pending approval.");
+
+		return Results.Ok(new
+		{
+			Message = "Check-in successful. Your device is pending approval.",
+			Status = DeviceStatus.Pending,
+			RequiresApproval = true
+		});
 	}
 
-	return Results.BadRequest("Check-in failed. Please contact support.");
-});
+	// Verify device belongs to this teacher
+	if (device.TeacherId != teacherId)
+	{
+		return Results.Problem(
+			"This device is registered to a different teacher",
+			statusCode: StatusCodes.Status403Forbidden);
+	}
 
-app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string deviceStatus) =>
+	// Check device status
+	switch (device.DeviceStatus)
+	{
+		case DeviceStatus.Blocked:
+			return Results.Problem(
+				"This device has been blocked. Please contact an administrator.",
+				statusCode: StatusCodes.Status403Forbidden);
+
+		case DeviceStatus.Pending:
+			return Results.Ok(new
+			{
+				Message = "Your device is pending approval. Check-in recorded but awaiting admin approval.",
+				Status = DeviceStatus.Pending,
+				RequiresApproval = true
+			});
+
+		case DeviceStatus.Approved:
+			// Create check-in record
+			var checkIn = new CheckIn
+			{
+				TeacherId = teacherId,
+				DeviceId = device.Id
+			};
+			await db.InsertAsync(checkIn);
+
+			// Update device last seen timestamp
+			device.LastSeen = DateTime.UtcNow;
+			await db.UpdateAsync(device);
+
+			return Results.Ok(new
+			{
+				Message = "Check-in successful.",
+				Status = DeviceStatus.Approved,
+				checkIn.CheckInTime
+			});
+
+		default:
+			return Results.Problem(
+				"Unknown device status. Please contact support.",
+				statusCode: StatusCodes.Status500InternalServerError);
+	}
+})
+.RequireAuthorization()
+.WithName("CreateCheckIn");
+
+app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string? deviceStatus) =>
 {
 	// use dtos
 	IEnumerable<CheckIn> checkIns;
@@ -244,11 +332,8 @@ app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string device
 	}
 
 	return Results.BadRequest("Invalid device status filter.");
-});
-
-// =============================================================================
-// Device Management Endpoints
-// =============================================================================
+})
+.RequireAuthorization();
 
 app.MapPatch("/api/devices/{deviceId}/approve", async (int deviceId, AppDataContext db) =>
 {
@@ -261,7 +346,8 @@ app.MapPatch("/api/devices/{deviceId}/approve", async (int deviceId, AppDataCont
 	device.DeviceStatus = DeviceStatus.Approved;
 	await db.UpdateAsync(device);
 	return Results.Ok("Device approved successfully.");
-});
+})
+.RequireAuthorization();
 
 app.MapPatch("/api/devices/{deviceId}/block", async (int deviceId, AppDataContext db) =>
 {
@@ -274,6 +360,33 @@ app.MapPatch("/api/devices/{deviceId}/block", async (int deviceId, AppDataContex
 	device.DeviceStatus = DeviceStatus.Blocked;
 	await db.UpdateAsync(device);
 	return Results.Ok("Device blocked successfully.");
-});
+})
+.RequireAuthorization();
+
+app.MapGet("/api/devices", async (AppDataContext db) =>
+{
+	var devices = await db.Devices
+		.LoadWith(d => d.Teacher)
+		.ToListAsync();
+	return Results.Ok(devices);
+})
+.RequireAuthorization()
+.WithName("GetAllDevices");
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+bool IsEmailDomainAllowed(string email, string[] allowedDomains)
+{
+	if (string.IsNullOrEmpty(email) || allowedDomains.Length == 0)
+		return true;
+
+	var domain = email.Split('@').LastOrDefault();
+	if (string.IsNullOrEmpty(domain))
+		return false;
+
+	return allowedDomains.Any(d => domain.Equals(d, StringComparison.OrdinalIgnoreCase));
+}
 
 app.Run();
