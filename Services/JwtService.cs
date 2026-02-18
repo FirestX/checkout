@@ -56,7 +56,7 @@ public class JwtService
 		return new JwtSecurityTokenHandler().WriteToken(token);
 	}
 
-	private TokenValidationParameters GetTokenValidationParameters()
+	public TokenValidationParameters GetTokenValidationParameters()
 	{
 		return new TokenValidationParameters
 		{
