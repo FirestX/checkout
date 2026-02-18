@@ -10,7 +10,7 @@
     <PackageReference Include="Google.Apis.Auth" Version="1.73.0" />
     <PackageReference Include="linq2db" Version="6.1.0" />
     <PackageReference Include="linq2db.SQLite" Version="6.1.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.3" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.3" />
