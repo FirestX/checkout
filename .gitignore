@@ -2,4 +2,6 @@ bin/
 obj/
 appsettings.Development.json
 appsettings.json
+*.db
+*.db.*
 .editorconfig

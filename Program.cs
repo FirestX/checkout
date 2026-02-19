@@ -35,6 +35,7 @@ var dataOptions = new DataOptions()
 	.UseSQLite(connectionString);
 
 builder.Services.AddScoped(_ => new AppDataContext(dataOptions));
+builder.Services.AddScoped<TeacherService>();
 
 // Register authentication services
 builder.Services.AddSingleton<JwtService>();
@@ -71,8 +72,6 @@ if (app.Environment.IsDevelopment())
 	app.UseSwaggerUI();
 
 	AppDataContext.DeleteDatabase(connectionString);
-
-	// Initialize database tables
 	AppDataContext.InitializeDatabase(dataOptions, connectionString);
 }
 
@@ -91,120 +90,35 @@ app.UseAuthorization();
 
 app.MapPost("/api/auth/google", async (
 	[FromBody] string idToken,
-	AppDataContext db,
+	TeacherService teacherService,
 	GoogleAuthService googleAuth,
-	JwtService jwt,
-	IConfiguration configuration) =>
+	JwtService jwt) =>
 {
-	try
+	var payload = await googleAuth.GetPayloadFromGoogleToken(idToken);
+
+	var teacher = await teacherService.GetTeacherAsync(payload.Subject);
+
+	if (teacher is null)
 	{
-		// 1. Verify Google token
-		var payload = await googleAuth.VerifyGoogleTokenAsync(idToken);
-
-		// 2. Validate email domain
-		var allowedDomains = configuration.GetSection("Authentication:AllowedEmailDomains").Get<string[]>() ?? [];
-		if (allowedDomains.Length > 0 && !IsEmailDomainAllowed(payload.Email, allowedDomains))
-		{
-			return Results.Problem(
-				$"Email domain not allowed. Please use an account from an authorized domain.",
-				statusCode: StatusCodes.Status403Forbidden);
-		}
-
-		// 3. Find or create teacher
-		var teacher = await db.Teachers
-			.FirstOrDefaultAsync(t => t.GoogleId == payload.Subject);
-
-		if (teacher == null)
-		{
-			teacher = new Teacher
-			{
-				GoogleId = payload.Subject,
-				Email = payload.Email,
-				FullName = payload.Name ?? payload.Email
-			};
-			teacher.Id = await db.InsertWithInt32IdentityAsync(teacher);
-		}
-		else
-		{
-			// Update teacher info if changed
-			if (teacher.Email != payload.Email || teacher.FullName != payload.Name)
-			{
-				teacher.Email = payload.Email;
-				teacher.FullName = payload.Name ?? payload.Email;
-				await db.UpdateAsync(teacher);
-			}
-		}
-
-		// 4. Generate JWT
-		var token = jwt.GenerateToken(teacher.Id, teacher.FullName, teacher.Email);
-
-		// 5. Return auth response
-		return Results.Ok(token);
+		var teacherId = await teacherService.CreateTeacher(payload);
+		teacher = await teacherService.GetTeacherAsync(teacherId)
+			?? throw new InvalidOperationException("Failed to create teacher record");
 	}
-	catch (InvalidOperationException ex)
+	else
 	{
-		return Results.Problem(ex.Message, statusCode: StatusCodes.Status401Unauthorized);
+		if (teacherService.IsInfoOutdated(teacher, payload))
+		{
+			teacher.Email = payload.Email;
+			teacher.FullName = payload.Name ?? payload.Email;
+			await teacherService.UpdateTeacherAsync(teacher);
+		}
 	}
-	catch (Exception ex)
-	{
-		Console.WriteLine($"Authentication error: {ex.Message}");
-		return Results.Problem("An error occurred during authentication");
-	}
+
+	var token = jwt.GenerateToken(teacher.Id, teacher.FullName, teacher.Email);
+
+	return Results.Ok(token);
 })
 .WithName("GoogleAuth");
-
-// =============================================================================
-// Dev/Test Endpoints (Development only)
-// =============================================================================
-
-if (app.Environment.IsDevelopment())
-{
-	app.MapPost("/api/auth/test", async (
-		[FromBody] TestAuthRequest request,
-		AppDataContext db,
-		JwtService jwt,
-		IConfiguration configuration) =>
-	{
-		try
-		{
-			// 1. Validate email domain
-			var allowedDomains = configuration.GetSection("Authentication:AllowedEmailDomains").Get<string[]>() ?? [];
-			if (allowedDomains.Length > 0 && !IsEmailDomainAllowed(request.Email, allowedDomains))
-			{
-				return Results.Problem(
-					$"Email domain not allowed. Please use an account from an authorized domain.",
-					statusCode: StatusCodes.Status403Forbidden);
-			}
-
-			// 2. Find or create teacher for testing
-			var teacher = await db.Teachers
-				.FirstOrDefaultAsync(t => t.GoogleId == request.GoogleId);
-
-			if (teacher == null)
-			{
-				teacher = new Teacher
-				{
-					GoogleId = request.GoogleId,
-					Email = request.Email,
-					FullName = request.FullName
-				};
-				teacher.Id = await db.InsertWithInt32IdentityAsync(teacher);
-				Console.WriteLine($"Created test teacher: {teacher.FullName} ({teacher.Email})");
-			}
-
-			// 3. Generate JWT
-			var token = jwt.GenerateToken(teacher.Id, teacher.FullName, teacher.Email);
-
-			return Results.Ok(token);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Test auth error: {ex.Message}");
-			return Results.Problem("An error occurred during test authentication");
-		}
-	})
-	.WithName("TestAuth");
-}
 
 app.MapPost("/api/check-ins", async (
 	[FromBody] CheckInRequestDto request,
@@ -372,21 +286,5 @@ app.MapGet("/api/devices", async (AppDataContext db) =>
 })
 .RequireAuthorization()
 .WithName("GetAllDevices");
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-bool IsEmailDomainAllowed(string email, string[] allowedDomains)
-{
-	if (string.IsNullOrEmpty(email) || allowedDomains.Length == 0)
-		return true;
-
-	var domain = email.Split('@').LastOrDefault();
-	if (string.IsNullOrEmpty(domain))
-		return false;
-
-	return allowedDomains.Any(d => domain.Equals(d, StringComparison.OrdinalIgnoreCase));
-}
 
 app.Run();
