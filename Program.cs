@@ -217,16 +217,13 @@ app.MapGet("/api/check-ins", async (CheckInService checkInService, [FromQuery] s
 })
 .RequireAuthorization();
 
-app.MapPatch("/api/devices/{deviceId}/approve", async (int deviceId, AppDataContext db) =>
+app.MapPatch("/api/devices/{deviceId}/approve", async (int deviceId, DeviceService deviceService) =>
 {
-	var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == deviceId);
+	var device = await deviceService.GetDeviceAsync(deviceId);
 	if (device is null)
-	{
 		return Results.NotFound("Device not found.");
-	}
 
-	device.DeviceStatus = DeviceStatus.Approved;
-	await db.UpdateAsync(device);
+	await deviceService.ApproveDeviceAsync(device);
 	return Results.Ok("Device approved successfully.");
 })
 .RequireAuthorization();

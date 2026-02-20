@@ -34,4 +34,9 @@ public class DeviceService(AppDataContext context)
 		await context.UpdateAsync(device);
 	}
 	
+	public async Task ApproveDeviceAsync(Device device)
+	{
+		device.DeviceStatus = DeviceStatus.Approved;
+		await context.UpdateAsync(device);
+	}
 }
