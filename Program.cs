@@ -228,16 +228,15 @@ app.MapPatch("/api/devices/{deviceId}/approve", async (int deviceId, DeviceServi
 })
 .RequireAuthorization();
 
-app.MapPatch("/api/devices/{deviceId}/block", async (int deviceId, AppDataContext db) =>
+app.MapPatch("/api/devices/{deviceId}/block", async (int deviceId, DeviceService deviceService) =>
 {
-	var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == deviceId);
+	var device = await deviceService.GetDeviceAsync(deviceId);
 	if (device is null)
 	{
 		return Results.NotFound("Device not found.");
 	}
 
-	device.DeviceStatus = DeviceStatus.Blocked;
-	await db.UpdateAsync(device);
+	await deviceService.BlockDeviceAsync(device);
 	return Results.Ok("Device blocked successfully.");
 })
 .RequireAuthorization();

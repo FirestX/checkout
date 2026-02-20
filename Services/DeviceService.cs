@@ -39,4 +39,10 @@ public class DeviceService(AppDataContext context)
 		device.DeviceStatus = DeviceStatus.Approved;
 		await context.UpdateAsync(device);
 	}
+	
+	public async Task BlockDeviceAsync(Device device)
+	{
+		device.DeviceStatus = DeviceStatus.Blocked;
+		await context.UpdateAsync(device);
+	}
 }
