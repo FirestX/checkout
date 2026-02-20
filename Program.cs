@@ -36,6 +36,8 @@ var dataOptions = new DataOptions()
 
 builder.Services.AddScoped(_ => new AppDataContext(dataOptions));
 builder.Services.AddScoped<TeacherService>();
+builder.Services.AddScoped<DeviceService>();
+builder.Services.AddScoped<CheckInService>();
 
 // Register authentication services
 builder.Services.AddSingleton<JwtService>();
@@ -121,46 +123,31 @@ app.MapPost("/api/auth/google", async (
 .WithName("GoogleAuth");
 
 app.MapPost("/api/check-ins", async (
-	[FromBody] CheckInRequestDto request,
-	HttpContext httpContext,
-	AppDataContext db) =>
+	[FromBody] string deviceFingerprint,
+	TeacherService teacherService,
+	DeviceService deviceService,
+	CheckInService checkInService,
+	HttpContext httpContext) =>
 {
-	// Extract teacher info from JWT claims
 	var teacherIdClaim = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 	var emailClaim = httpContext.User.FindFirst(ClaimTypes.Email)?.Value;
 	var fullNameClaim = httpContext.User.FindFirst(ClaimTypes.Name)?.Value;
 
 	if (string.IsNullOrEmpty(teacherIdClaim) || string.IsNullOrEmpty(emailClaim))
-	{
 		return Results.Unauthorized();
-	}
 
 	if (!int.TryParse(teacherIdClaim, out var teacherId))
-	{
 		return Results.Unauthorized();
-	}
 
-	// Verify teacher exists in database
-	var teacher = await db.Teachers.FirstOrDefaultAsync(t => t.Id == teacherId);
-	if (teacher == null)
-	{
+	var teacher = await teacherService.GetTeacherAsync(teacherId);
+	if (teacher is null)
 		return Results.NotFound("Teacher not found");
-	}
 
-	// Find device by fingerprint
-	var device = await db.Devices.FirstOrDefaultAsync(d => d.Fingerprint == request.DeviceFingerprint);
+	var device = await deviceService.GetDeviceAsync(deviceFingerprint);
 
-	// If device doesn't exist, create it with Pending status
 	if (device is null)
 	{
-		var newDevice = new Device
-		{
-			TeacherId = teacherId,
-			Fingerprint = request.DeviceFingerprint,
-			DeviceStatus = DeviceStatus.Pending
-		};
-		var deviceId = await db.InsertWithInt32IdentityAsync(newDevice);
-
+		var deviceId = await deviceService.CreateDeviceAsync(teacherId, deviceFingerprint);
 		return Results.Ok(new
 		{
 			Message = "Check-in successful. Your device is pending approval.",
@@ -169,7 +156,6 @@ app.MapPost("/api/check-ins", async (
 		});
 	}
 
-	// Verify device belongs to this teacher
 	if (device.TeacherId != teacherId)
 	{
 		return Results.Problem(
@@ -177,7 +163,6 @@ app.MapPost("/api/check-ins", async (
 			statusCode: StatusCodes.Status403Forbidden);
 	}
 
-	// Check device status
 	switch (device.DeviceStatus)
 	{
 		case DeviceStatus.Blocked:
@@ -194,29 +179,19 @@ app.MapPost("/api/check-ins", async (
 			});
 
 		case DeviceStatus.Approved:
-			// Create check-in record
-			var checkIn = new CheckIn
-			{
-				TeacherId = teacherId,
-				DeviceId = device.Id
-			};
-			await db.InsertAsync(checkIn);
+			await checkInService.CheckInAsync(teacherId, device.Id);
 
-			// Update device last seen timestamp
-			device.LastSeen = DateTime.UtcNow;
-			await db.UpdateAsync(device);
-
+			await deviceService.SeenDeviceAsync(device);
 			return Results.Ok(new
 			{
 				Message = "Check-in successful.",
 				Status = DeviceStatus.Approved,
-				checkIn.CheckInTime
 			});
 
 		default:
 			return Results.Problem(
 				"Unknown device status. Please contact support.",
-				statusCode: StatusCodes.Status500InternalServerError);
+				statusCode: StatusCodes.Status400BadRequest);
 	}
 })
 .RequireAuthorization()
