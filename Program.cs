@@ -29,7 +29,6 @@ builder.Services.AddSwaggerGen(c =>
 	});
 });
 
-// Register AppDataContext with SQLite
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")!;
 var dataOptions = new DataOptions()
 	.UseSQLite(connectionString);
@@ -85,10 +84,6 @@ if (!app.Environment.IsDevelopment())
 app.UseCors("AllowFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
-
-// =============================================================================
-// Authentication Endpoints
-// =============================================================================
 
 app.MapPost("/api/auth/google", async (
 	[FromBody] string idToken,
@@ -232,9 +227,7 @@ app.MapPatch("/api/devices/{deviceId}/block", async (int deviceId, DeviceService
 {
 	var device = await deviceService.GetDeviceAsync(deviceId);
 	if (device is null)
-	{
 		return Results.NotFound("Device not found.");
-	}
 
 	await deviceService.BlockDeviceAsync(device);
 	return Results.Ok("Device blocked successfully.");
