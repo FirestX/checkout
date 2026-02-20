@@ -197,30 +197,23 @@ app.MapPost("/api/check-ins", async (
 .RequireAuthorization()
 .WithName("CreateCheckIn");
 
-app.MapGet("/api/check-ins", async (AppDataContext db, [FromQuery] string? deviceStatus) =>
+app.MapGet("/api/check-ins", async (CheckInService checkInService, [FromQuery] string? deviceStatus) =>
 {
-	// use dtos
-	IEnumerable<CheckIn> checkIns;
+	IEnumerable<CheckInDto> checkIns;
 	if (string.IsNullOrEmpty(deviceStatus))
 	{
-		checkIns = await db.CheckIns
-			.LoadWith(c => c.Teacher)
-			.LoadWith(c => c.Device)
-			.ToListAsync();
-		return Results.Ok(checkIns);
+		checkIns = await checkInService.GetCheckInsWithDetailsAsync();
 	}
-
-	if (DeviceStatus.IsValidStatus(deviceStatus))
+	else if (DeviceStatus.IsValidStatus(deviceStatus))
 	{
-		checkIns = await db.CheckIns
-			.LoadWith(c => c.Teacher)
-			.LoadWith(c => c.Device)
-			.Where(c => c.Device.DeviceStatus == deviceStatus)
-			.ToListAsync();
-		return Results.Ok(checkIns);
+		checkIns = await checkInService.GetCheckInsWithDetailsAsync(deviceStatus);
+	}
+	else
+	{
+		return Results.BadRequest("Invalid device status filter.");
 	}
 
-	return Results.BadRequest("Invalid device status filter.");
+	return Results.Ok(checkIns);
 })
 .RequireAuthorization();
 
