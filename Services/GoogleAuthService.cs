@@ -5,7 +5,7 @@ namespace CheckOut.Services;
 public class GoogleAuthService
 {
 	private readonly string _clientId;
-	private readonly string? _allowedDomain;
+	private readonly string _allowedDomain;
 
 	public GoogleAuthService(IConfiguration configuration)
 	{
@@ -13,7 +13,7 @@ public class GoogleAuthService
 
 		_clientId = googleSection.GetValue<string>("ClientId")
 			?? throw new ArgumentNullException("Google:ClientId is not configured");
-		_allowedDomain = googleSection.GetValue<string>("AllowedDomain") 
+		_allowedDomain = configuration.GetSection("Authentication").GetValue<string>("AllowedDomain") 
 			?? throw new ArgumentNullException("Google:AllowedDomain is not configured");
 	}
 
