@@ -1,57 +1,42 @@
-using Google.Apis.Auth;
+using static Google.Apis.Auth.GoogleJsonWebSignature;
 
 namespace CheckOut.Services;
 
 public class GoogleAuthService
 {
 	private readonly string _clientId;
-	private readonly string? _allowedDomain;
+	private readonly string _allowedDomain;
 
 	public GoogleAuthService(IConfiguration configuration)
 	{
 		var googleSection = configuration.GetSection("Authentication:Google");
-		
-		_clientId = googleSection.GetValue<string>("ClientId") 
+
+		_clientId = googleSection.GetValue<string>("ClientId")
 			?? throw new ArgumentNullException("Google:ClientId is not configured");
-		_allowedDomain = googleSection.GetValue<string>("AllowedDomain");
+		_allowedDomain = configuration.GetSection("Authentication").GetValue<string>("AllowedDomain") 
+			?? throw new ArgumentNullException("Google:AllowedDomain is not configured");
 	}
 
-	/// <summary>
-	/// Verifies the Google ID token and returns the payload if valid.
-	/// </summary>
-	/// <param name="idToken">The Google ID token from the frontend</param>
-	/// <returns>The validated Google payload containing user information</returns>
-	/// <exception cref="InvalidOperationException">Thrown when token validation fails</exception>
-	public async Task<GoogleJsonWebSignature.Payload> VerifyGoogleTokenAsync(string idToken)
+	public async Task<Payload> GetPayloadFromGoogleToken(string idToken)
 	{
-		try
+		var settings = new ValidationSettings
 		{
-			var settings = new GoogleJsonWebSignature.ValidationSettings
-			{
-				Audience = [_clientId]
-			};
+			Audience = [_clientId]
+		};
 
-			var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, settings);
+		var payload = await ValidateAsync(idToken, settings);
 
-			// Validate domain if configured
-			if (!string.IsNullOrEmpty(_allowedDomain))
-			{
-				if (string.IsNullOrEmpty(payload.Email))
-				{
-					throw new InvalidOperationException("Email not found in Google token");
-				}
+		if (string.IsNullOrEmpty(payload.HostedDomain))
+			throw new InvalidOperationException("Hosted domain not found in Google token");
 
-				if (!payload.Email.EndsWith($"@{_allowedDomain}", StringComparison.OrdinalIgnoreCase))
-				{
-					throw new InvalidOperationException($"Only @{_allowedDomain} accounts are allowed");
-				}
-			}
+		if (!IsAllowedEmailDomain(payload.HostedDomain))
+			throw new InvalidOperationException($"Only @{_allowedDomain} accounts are allowed");
 
-			return payload;
-		}
-		catch (InvalidJwtException ex)
-		{
-			throw new InvalidOperationException($"Invalid Google token: {ex.Message}", ex);
-		}
+		return payload;
+	}
+
+	private bool IsAllowedEmailDomain(string hostedDomain)
+	{
+		return hostedDomain.Equals(_allowedDomain, StringComparison.OrdinalIgnoreCase);
 	}
 }
